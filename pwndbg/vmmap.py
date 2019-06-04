@@ -48,6 +48,11 @@ def get():
     pages.extend(proc_pid_maps())
 
     if not pages:
+        # If debugee is launched from a symlink the debugee memory maps will be
+        # labeled with symlink path while in normal scenario the /proc/pid/maps
+        # labels debugee memory maps with real path (after symlinks).
+        # This is because the exe path in AUXV (and so `info auxv`) is before
+        # following links.
         pages.extend(info_auxv())
 
         if pages: pages.extend(info_sharedlibrary())
@@ -62,11 +67,10 @@ def get():
 
 @pwndbg.memoize.reset_on_stop
 def find(address):
-    if address is None or address < pwndbg.memory.MMAP_MIN_ADDR:
+    if address is None:
         return None
 
-    if address:
-        address = int(address)
+    address = int(address)
 
     for page in get():
         if address in page:
@@ -103,6 +107,7 @@ def explore(address_maybe):
     flags |= 1 if not pwndbg.stack.nx               else 0
 
     page = find_boundaries(address_maybe)
+    page.objfile = '<explored>'
     page.flags = flags
 
     explored_pages.append(page)
@@ -150,7 +155,9 @@ def proc_pid_maps():
         A list of pwndbg.memory.Page objects.
     """
 
-    if pwndbg.qemu.is_qemu_usermode():
+    # If we debug remotely a qemu-user or qemu-system target,
+    # there is no point of hitting things further
+    if pwndbg.qemu.is_qemu():
         return tuple()
 
     example_proc_pid_maps = """
@@ -326,7 +333,8 @@ def info_files():
 def info_auxv(skip_exe=False):
     """
     Extracts the name of the executable from the output of the command
-    "info auxv".
+    "info auxv". Note that if the executable path is a symlink,
+    it is not dereferenced by `info auxv` and we also don't dereference it.
 
     Arguments:
         skip_exe(bool): Do not return any mappings that belong to the exe.
