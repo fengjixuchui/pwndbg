@@ -55,7 +55,7 @@ def format_bin(bins, verbose=False, offset=None):
 
         if not verbose and (chain_fd == [0] and not count) and not is_chain_corrupted:
             continue
-        
+
         if bins_type == 'tcachebins':
             limit = 8
             if count <= 7:
@@ -115,17 +115,14 @@ def heap(addr=None):
     first_chunk_size = pwndbg.arch.unpack(pwndbg.memory.read(addr + size_t, size_t))
     if first_chunk_size == 0:
         addr += size_t * 2  # Skip the alignment
-
     while addr < page.vaddr + page.memsz:
         chunk = malloc_chunk(addr)  # Prints the chunk
         size = int(chunk['size'])
-
         # Clear the bottom 3 bits
         size &= ~7
         if size == 0:
             break
         addr += size
-
 parser = argparse.ArgumentParser()
 parser.description = "Prints out the main arena or the arena at the specified by address."
 parser.add_argument("addr", nargs="?", type=int, default=None, help="The address of the arena.")
@@ -213,33 +210,7 @@ def top_chunk(addr=None):
     """
     main_heap   = pwndbg.heap.current
     main_arena  = main_heap.get_arena(addr)
-
-    if main_arena is None:
-        heap_region = main_heap.get_heap_boundaries()
-        if not heap_region:
-            print(message.error('Could not find the heap'))
-            return
-
-        heap_start = heap_region.vaddr
-        heap_end   = heap_start + heap_region.size
-
-        # If we don't know where the main_arena struct is, just iterate
-        # through all the heap objects until we hit the last one
-        last_addr = None
-        addr = heap_start
-        while addr < heap_end:
-            chunk = read_chunk(addr)
-            size = int(chunk['size'])
-
-            # Clear the bottom 3 bits
-            size &= ~7
-
-            last_addr = addr
-            addr += size
-            addr += size
-        address = last_addr
-    else:
-        address = main_arena['top']
+    address = main_arena['top']
 
     return malloc_chunk(address)
 
@@ -461,22 +432,25 @@ parser.description = """
     Finds candidate fake fast chunks that will overlap with the specified
     address. Used for fastbin dups and house of spirit
     """
-parser.add_argument("addr", type=int, help="The start address.") #TODO describe these better
-parser.add_argument("size", type=int, help="The size.")
+parser.add_argument("addr", type=int, help="The start address of a word size value you want to overlap.")
+parser.add_argument("size", nargs="?", type=int, default=None, help="The size of fastbin you want to use.")
 @pwndbg.commands.ArgparsedCommand(parser)
 @pwndbg.commands.OnlyWhenRunning
 @pwndbg.commands.OnlyWithLibcDebugSyms
 @pwndbg.commands.OnlyWhenHeapIsInitialized
-def find_fake_fast(addr, size):
+def find_fake_fast(addr, size=None):
     """
     Finds candidate fake fast chunks that will overlap with the specified
     address. Used for fastbin dups and house of spirit
     """
+    psize = pwndbg.arch.ptrsize
     main_heap = pwndbg.heap.current
+    align = main_heap.malloc_alignment
+    min_fast = main_heap.min_chunk_size
     max_fast = main_heap.global_max_fast
-    fastbin  = main_heap.fastbin_index(int(size))
-    start    = int(addr) - int(max_fast)
-    mem      = pwndbg.memory.read(start, max_fast, partial=True)
+    max_fastbin  = main_heap.fastbin_index(max_fast)
+    start    = int(addr) - max_fast + psize
+    mem      = pwndbg.memory.read(start, max_fast - psize, partial=True)
 
     fmt = {
         'little': '<',
@@ -484,62 +458,71 @@ def find_fake_fast(addr, size):
     }[pwndbg.arch.endian] + {
         4: 'I',
         8: 'Q'
-    }[pwndbg.arch.ptrsize]
+    }[psize]
+
+    if size is None:
+        sizes = range(min_fast, max_fast + 1, align)
+    else:
+        sizes = [size]
 
     print(C.banner("FAKE CHUNKS"))
-    for offset in range(max_fast - pwndbg.arch.ptrsize):
-        candidate = mem[offset:offset + pwndbg.arch.ptrsize]
-        if len(candidate) == pwndbg.arch.ptrsize:
-            value = struct.unpack(fmt, candidate)[0]
-
-            if main_heap.fastbin_index(value) == fastbin:
-                malloc_chunk(start+offset-pwndbg.arch.ptrsize,fake=True)
+    for size in sizes:
+        fastbin  = main_heap.fastbin_index(size)
+        for offset in range((max_fastbin - fastbin) * align, max_fast - align + 1):
+            candidate = mem[offset : offset + psize]
+            if len(candidate) == psize:
+                value = struct.unpack(fmt, candidate)[0]
+                if main_heap.fastbin_index(value) == fastbin:
+                    malloc_chunk(start+offset-psize, fake=True)
 
 
 vis_heap_chunks_parser = argparse.ArgumentParser(description='Visualize heap chunks at the specified address')
-vis_heap_chunks_parser.add_argument('count', nargs='?', default=10,
-                    help='Number of chunks to visualize')
+vis_heap_chunks_parser.add_argument('count', type=lambda n:max(int(n, 0),1), nargs='?', default=10, help='Number of chunks to visualize')
 vis_heap_chunks_parser.add_argument('address', help='Start address', nargs='?', default=None)
-vis_heap_chunks_parser.add_argument('--naive', '-n', help='Don\'t use end-of-heap heuristics', action='store_true', default=False)
+vis_heap_chunks_parser.add_argument('--naive', '-n', help='Attempt to keep printing beyond the top chunk', action='store_true', default=False)
 
 @pwndbg.commands.ArgparsedCommand(vis_heap_chunks_parser)
 @pwndbg.commands.OnlyWhenRunning
 @pwndbg.commands.OnlyWithLibcDebugSyms
 @pwndbg.commands.OnlyWhenHeapIsInitialized
 def vis_heap_chunks(address=None, count=None, naive=None):
-    address = int(address) if address else pwndbg.heap.current.get_heap_boundaries().vaddr
     main_heap = pwndbg.heap.current
-    main_arena = main_heap.get_arena()
-    top_chunk = int(main_arena['top'])
+    heap_region = main_heap.get_heap_boundaries(address)
+    main_arena = main_heap.get_arena_for_chunk(address) if address else main_heap.main_arena
 
-    unpack = pwndbg.arch.unpack
+    top_chunk = main_arena['top']
+    ptr_size = main_heap.size_sz
 
-    cells_map = {}
-    chunk_id = 0
-    ptr_size = pwndbg.arch.ptrsize
-    while chunk_id < count:
-        prev_size = unpack(pwndbg.memory.read(address, ptr_size))
-        current_size = unpack(pwndbg.memory.read(address+ptr_size, ptr_size))
-        real_size = current_size & ~main_heap.malloc_align_mask
-        prev_inuse = current_size & 1
-        stop_addr = address + real_size
+    # Build a list of addresses that delimit each chunk.
+    chunk_delims = []
+    cursor = int(address) if address else heap_region.start
 
-        while address < stop_addr and (naive or address < top_chunk):
-            assert address not in cells_map
-            cells_map[address] = chunk_id
-            address += ptr_size
-
-        if prev_inuse and (naive or address != top_chunk):
-            cells_map[address - real_size] -= 1
-
-        chunk_id += 1
-
-        # we reached top chunk, add it's metadata and break
-        if address >= top_chunk:
-            cells_map[address] = chunk_id
-            cells_map[address+ptr_size] = chunk_id
+    for _ in range(count + 1):
+        # Don't read beyond the heap mapping if --naive or corrupted heap.
+        if cursor not in heap_region:
+            chunk_delims.append(heap_region.end)
             break
 
+        size_field = pwndbg.memory.u(cursor + ptr_size)
+        real_size = size_field & ~main_heap.malloc_align_mask
+        prev_inuse = main_heap.chunk_flags(size_field)[0]
+
+        # Don't repeatedly operate on the same address (e.g. chunk size of 0).
+        if cursor in chunk_delims or cursor + ptr_size in chunk_delims:
+            break
+
+        if prev_inuse:
+            chunk_delims.append(cursor + ptr_size)
+        else:
+            chunk_delims.append(cursor)
+
+        if (cursor == top_chunk and not naive) or (cursor == heap_region.end - ptr_size*2):
+            chunk_delims.append(cursor + ptr_size*2)
+            break
+
+        cursor += real_size
+
+    # Build the output buffer, changing color at each chunk delimiter.
     # TODO: maybe print free chunks in bold or underlined
     color_funcs = [
         generateColorFunction("yellow"),
@@ -549,7 +532,6 @@ def vis_heap_chunks(address=None, count=None, naive=None):
         generateColorFunction("blue"),
     ]
 
-    addrs = sorted(cells_map.keys())
     bin_collections = [
         pwndbg.heap.current.fastbins(None),
         pwndbg.heap.current.unsortedbin(None),
@@ -563,30 +545,32 @@ def vis_heap_chunks(address=None, count=None, naive=None):
     out = ''
     asc = ''
     labels = []
+    cursor = int(address) if address else heap_region.start
 
-    for addr in addrs:
-        if printed % 2 == 0:
-            out += "\n0x%x" % addr
+    for c, stop in enumerate(chunk_delims):
+        color_func = color_funcs[c % len(color_funcs)]
 
-        cell = unpack(pwndbg.memory.read(addr, ptr_size))
-        cell_hex = '\t0x{:0{n}x}'.format(cell, n=ptr_size*2)
+        while cursor != stop:
+            if printed % 2 == 0:
+                out += "\n0x%x" % cursor
 
-        chunk_idx = cells_map[addr]
-        color_func_idx = chunk_idx % len(color_funcs)
-        color_func = color_funcs[color_func_idx]
+            cell = pwndbg.memory.u(cursor)
+            cell_hex = '\t0x{:0{n}x}'.format(cell, n=ptr_size*2)
 
-        out += color_func(cell_hex)
-        printed += 1
+            out += color_func(cell_hex)
+            printed += 1
 
-        labels.extend(bin_labels(addr, bin_collections))
-        if addr == top_chunk:
-            labels.append('Top chunk')
+            labels.extend(bin_labels(cursor, bin_collections))
+            if cursor == top_chunk:
+                labels.append('Top chunk')
 
-        asc += bin_ascii(pwndbg.memory.read(addr, ptr_size))
-        if printed % 2 == 0:
-            out += '\t' + color_func(asc) + ('\t <-- ' + ', '.join(labels) if len(labels) else '')
-            asc = ''
-            labels = []
+            asc += bin_ascii(pwndbg.memory.read(cursor, ptr_size))
+            if printed % 2 == 0:
+                out += '\t' + color_func(asc) + ('\t <-- ' + ', '.join(labels) if len(labels) else '')
+                asc = ''
+                labels = []
+
+            cursor += ptr_size
 
     print(out)
 

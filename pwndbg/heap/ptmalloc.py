@@ -350,7 +350,7 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
 
     def get_arena_for_chunk(self,addr):
-        chunk = pwndbg.memory.poi(self.malloc_state,addr)
+        chunk = pwndbg.commands.heap.read_chunk(addr)
         _,_,nm = self.chunk_flags(chunk['size'])
         if nm:
             r=self.get_arena(arena_addr=self.get_heap(addr)['ar_ptr'])
@@ -372,8 +372,8 @@ class Heap(pwndbg.heap.heap.BaseHeap):
         adresses inside it or a fake Page for the containing heap for non-main arenas.
         """
         page = pwndbg.memory.Page(0, 0, 0, 0)
-        brk = self.get_region()
-        if addr is None or brk.vaddr < addr < brk.vaddr + brk.memsz:
+        brk = self.get_region(addr)
+        if brk == self.get_region():
             # Occasionally, the [heap] vm region and the actual start of the heap are
             # different, e.g. [heap] starts at 0x61f000 but mp_.sbrk_base is 0x620000.
             # Return an adjusted Page object if this is the case.
@@ -382,13 +382,8 @@ class Heap(pwndbg.heap.heap.BaseHeap):
                 page.vaddr = sbrk_base
                 page.memsz = brk.memsz - (sbrk_base - brk.vaddr)
                 return page
-            else:
-                return brk
-        else:
-            page.vaddr = heap_for_ptr(addr)
-            heap = self.get_heap(page.vaddr)
-            page.memsz = int(heap['size'])
-            return page
+
+        return brk
 
 
     def get_region(self, addr=None):
@@ -563,14 +558,8 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
 
     def is_initialized(self):
-        """
-        malloc state is initialized when a new arena is created. 
-            https://sourceware.org/git/?p=glibc.git;a=blob;f=malloc/malloc.c;h=96149549758dd424f5c08bed3b7ed1259d5d5664;hb=HEAD#l1807
-        By default main_arena is partially initialized, and during the first usage of a glibc allocator function some other field are populated.
-        global_max_fast is one of them thus the call of set_max_fast() when initializing the main_arena, 
-        making it one of the ways to check if the allocator is initialized or not.
-        """
-        return self.global_max_fast != 0
+        addr = pwndbg.symbol.address('__libc_malloc_initialized')
+        return pwndbg.memory.s32(addr) > 0
 
     def libc_has_debug_syms(self):
         return pwndbg.symbol.address('global_max_fast') is not None
