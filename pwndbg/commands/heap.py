@@ -511,7 +511,7 @@ def find_fake_fast(addr, size=None):
     if size is None:
         sizes = range(min_fast, max_fast + 1, align)
     else:
-        sizes = [size]
+        sizes = [int(size)]
 
     print(C.banner("FAKE CHUNKS"))
     for size in sizes:
@@ -969,7 +969,7 @@ def try_free(addr):
                 print(message.notice('Clearing next chunk\'s P bit'))
 
             # unsorted bin fd->bk should be unsorted bean
-            unsorted_addr = int(arena['bins']) - 2*ptr_size
+            unsorted_addr = int(arena['bins'][0])
             try:
                 unsorted = read_chunk(unsorted_addr)
                 try:
