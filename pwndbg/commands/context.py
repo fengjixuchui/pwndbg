@@ -1,9 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 import argparse
 import ast
@@ -75,7 +71,7 @@ def validate_context_sections():
             config_context_sections.revert_default()
             return
 
-class StdOutput(object):
+class StdOutput:
     """A context manager wrapper to give stdout"""
     def __enter__(self):
         return sys.stdout
@@ -86,7 +82,7 @@ class StdOutput(object):
     def __eq__(self, other):
         return type(other) is StdOutput
 
-class FileOutput(object):
+class FileOutput:
     """A context manager wrapper to reopen files on enter"""
     def __init__(self, *args):
         self.args = args
@@ -101,7 +97,7 @@ class FileOutput(object):
     def __eq__(self, other):
         return self.args == other.args
 
-class CallOutput(object):
+class CallOutput:
     """A context manager which calls a function on write"""
     def __init__(self, func):
         self.func = func
@@ -356,9 +352,66 @@ def context(subcontext=None):
             out.flush()
 
 
+pwndbg.config.Parameter('show-compact-regs', False, 'whether to show a compact register view')
+pwndbg.config.Parameter('show-compact-regs-align', 20, 'the number of characters reserved for each register and value')
+pwndbg.config.Parameter('show-compact-regs-space', 4, 'the minimum number of characters separating each register')
+
+
+def calculate_padding_to_align(length, align):
+    ''' Calculates the number of spaces to append to reach the next alignment.
+        The next alignment point is given by "x * align >= length".
+    '''
+    return 0 if length % align == 0 else (align - (length % align))
+
+
+def compact_regs(regs, width):
+    align = int(pwndbg.config.show_compact_regs_align)
+    space = int(pwndbg.config.show_compact_regs_space)
+    result = []
+
+    line = ''
+    line_length = 0
+    for reg in regs:
+        reg_length = len(pwndbg.color.strip(reg))
+
+        # Length of line with space and padding is required for fitting the
+        # register string onto the screen / display
+        line_length_with_padding = line_length
+        line_length_with_padding += space if line_length != 0 else 0
+        line_length_with_padding += calculate_padding_to_align(line_length_with_padding, align)
+
+        # When element does not fully fit, then start a new line
+        if line_length_with_padding + max(reg_length, align) > width:
+            result.append(line)
+
+            line = ''
+            line_length = 0
+            line_length_with_padding = 0
+
+        # Add padding
+        if line != '':
+            line += ' ' * (line_length_with_padding - line_length)
+
+        line += reg
+        line_length = line_length_with_padding + reg_length
+
+    if line != '':
+        result.append(line)
+
+    return result
+
+
 def context_regs(target=sys.stdout, with_banner=True, width=None):
+    if width is None:
+        _height, width = pwndbg.ui.get_window_size(target=target)
+
+    regs = get_regs()
+    if pwndbg.config.show_compact_regs:
+        regs = compact_regs(regs, width)
+
     banner = [pwndbg.ui.banner("registers", target=target, width=width)]
-    return banner + get_regs() if with_banner else get_regs()
+    return banner + regs if with_banner else regs
+
 
 parser = argparse.ArgumentParser()
 parser.description = '''Print out all registers and enhance the information.'''
@@ -530,7 +583,6 @@ def context_code(target=sys.stdout, with_banner=True, width=None):
 
 stack_lines = pwndbg.config.Parameter('context-stack-lines', 8, 'number of lines to print in the stack context')
 
-
 def context_stack(target=sys.stdout, with_banner=True, width=None):
     result = [pwndbg.ui.banner("stack", target=target, width=width)] if with_banner else []
     telescope = pwndbg.commands.telescope.telescope(pwndbg.regs.sp, to_string=True, count=stack_lines)
@@ -538,10 +590,11 @@ def context_stack(target=sys.stdout, with_banner=True, width=None):
         result.extend(telescope)
     return result
 
+
+backtrace_lines = pwndbg.config.Parameter('context-backtrace-lines', 8, 'number of lines to print in the backtrace context')
 backtrace_frame_label = theme.Parameter('backtrace-frame-label', 'f ', 'frame number label for backtrace')
 
-
-def context_backtrace(frame_count=10, with_banner=True, target=sys.stdout, width=None):
+def context_backtrace(with_banner=True, target=sys.stdout, width=None):
     result = []
 
     if with_banner:
@@ -551,7 +604,7 @@ def context_backtrace(frame_count=10, with_banner=True, target=sys.stdout, width
     newest_frame  = this_frame
     oldest_frame  = this_frame
 
-    for i in range(frame_count):
+    for i in range(backtrace_lines-1):
         try:
             candidate = oldest_frame.older()
         except gdb.MemoryError:
@@ -561,7 +614,7 @@ def context_backtrace(frame_count=10, with_banner=True, target=sys.stdout, width
             break
         oldest_frame = candidate
 
-    for i in range(frame_count):
+    for i in range(backtrace_lines-1):
         candidate = newest_frame.newer()
         if not candidate:
             break

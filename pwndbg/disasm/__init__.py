@@ -4,10 +4,6 @@
 Functionality for disassmebling code at an address, or at an
 address +/- a few instructions.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 
 import collections
 
@@ -18,7 +14,6 @@ from capstone import *
 import pwndbg.arch
 import pwndbg.disasm.arch
 import pwndbg.ida
-import pwndbg.jump
 import pwndbg.memoize
 import pwndbg.memory
 import pwndbg.symbol
@@ -33,6 +28,7 @@ CapstoneArch = {
     'armcm': CS_ARCH_ARM,
     'aarch64': CS_ARCH_ARM64,
     'i386': CS_ARCH_X86,
+    'i8086': CS_ARCH_X86,
     'x86-64': CS_ARCH_X86,
     'powerpc': CS_ARCH_PPC,
     'mips': CS_ARCH_MIPS,
@@ -57,6 +53,7 @@ CapstoneMode = {
 VariableInstructionSizeMax = {
     'i386':   16,
     'x86-64': 16,
+    'i8086':  16,
     'mips':   8,
 }
 
@@ -90,6 +87,10 @@ def get_disassembler(pc):
         else:
             # The ptrsize base modes cause capstone.CsError: Invalid mode (CS_ERR_MODE)
             extra = 0 
+            
+    elif pwndbg.arch.current == 'i8086':
+        extra = CS_MODE_16
+    
     else:
         extra = None
 

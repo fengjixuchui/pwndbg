@@ -20,9 +20,7 @@ osx() {
 
 install_apt() {
     sudo apt-get update || true
-    # This breaks Ubuntu 20.04, but is probably still needed for older version
-    sudo apt-get -y install python-pip || true
-    sudo apt-get -y install git gdb python-dev python3-dev python3-pip libglib2.0-dev libc6-dbg
+    sudo apt-get -y install git gdb python3-dev python3-pip python3-setuptools libglib2.0-dev libc6-dbg
 
     if uname -m | grep x86_64 > /dev/null; then
         sudo apt-get -y install libc6-dbg:i386 || true
@@ -53,6 +51,10 @@ install_zypper() {
     if uname -m | grep x86_64 > /dev/null; then
         sudo zypper install -y glibc-32bit-debuginfo || true
     fi
+}
+
+install_emerge() {
+    emerge --oneshot --deep --newuse --changed-use --changed-deps dev-lang/python dev-python/pip sys-devel/gdb
 }
 
 PYTHON=''
@@ -95,6 +97,14 @@ if linux; then
             ;;
         "void")
             install_xbps
+            ;;
+        "gentoo")
+            install_emerge
+            if ! hash sudo 2>/dev/null && whoami | grep root; then
+                sudo() {
+                    $*
+                }
+            fi
             ;;
         *) # we can add more install command for each distros.
             echo "\"$distro\" is not supported distro. Will search for 'apt' or 'dnf' package managers."

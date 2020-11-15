@@ -1,10 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import struct
 import sys
 
@@ -37,6 +32,7 @@ def fix_arch(arch):
     return arch
 
 @pwndbg.events.start
+@pwndbg.events.stop
 @pwndbg.events.new_objfile
 def update():
     m = sys.modules[__name__]
@@ -65,10 +61,6 @@ def update():
     (8, 'little'): '<Q',
     (8, 'big'):    '>Q',
     }.get((m.ptrsize, m.endian))
-
-    # Work around Python 2.7.6 struct.pack / unicode incompatibility
-    # See https://github.com/pwndbg/pwndbg/pull/336 for more information.
-    m.fmt = str(m.fmt)
 
     # Attempt to detect the qemu-user binary name
     if m.current == 'arm' and m.endian == 'big':

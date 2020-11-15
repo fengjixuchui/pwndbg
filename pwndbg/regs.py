@@ -4,11 +4,6 @@
 Reading register value from the inferior, and provides a
 standardized interface to registers like "sp" and "pc".
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import collections
 import ctypes
 import re
@@ -16,7 +11,6 @@ import sys
 from types import ModuleType
 
 import gdb
-import six
 
 import pwndbg.arch
 import pwndbg.events
@@ -30,7 +24,7 @@ except NameError:
     long=int
 
 
-class RegisterSet(object):
+class RegisterSet:
     #: Program counter register
     pc = None
 
@@ -168,7 +162,6 @@ i386 = RegisterSet( pc      = 'eip',
                                 'di','si','bp','sp','ip'),
                     retval  = 'eax')
 
-
 # http://math-atlas.sourceforge.net/devel/assembly/elfspec_ppc.pdf
 # r0      Volatile register which may be modified during function linkage
 # r1      Stack frame pointer, always valid
@@ -248,6 +241,7 @@ mips = RegisterSet( frame   = 'fp',
 
 arch_to_regs = {
     'i386': i386,
+    'i8086': i386,
     'x86-64': amd64,
     'mips': mips,
     'sparc': sparc,
@@ -295,6 +289,8 @@ class module(ModuleType):
                 value = get_register(attr)
                 size = pwndbg.typeinfo.unsigned.get(value.type.sizeof, pwndbg.typeinfo.ulong)
                 value = value.cast(size)
+                if attr.lower() == 'pc' and pwndbg.arch.current == 'i8086':
+                    value += self.cs * 16
 
             value = int(value)
             return value & pwndbg.arch.ptrmask
@@ -304,9 +300,10 @@ class module(ModuleType):
     @pwndbg.memoize.reset_on_stop
     @pwndbg.memoize.reset_on_prompt
     def __getitem__(self, item):
-        if not isinstance(item, six.string_types):
+        if not isinstance(item, str):
             print("Unknown register type: %r" % (item))
-            import pdb, traceback
+            import pdb
+            import traceback
             traceback.print_stack()
             pdb.set_trace()
             return None
@@ -315,7 +312,7 @@ class module(ModuleType):
         item = item.lstrip('$')
         item = getattr(self, item.lower())
 
-        if isinstance(item, six.integer_types):
+        if isinstance(item, int):
             return int(item) & pwndbg.arch.ptrmask
 
         return item
